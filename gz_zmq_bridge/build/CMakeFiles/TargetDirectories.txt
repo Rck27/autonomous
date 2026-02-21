@@ -1,3 +1,0 @@
-/mnt/data/home-distrobox/ardupilot-env/autonomous/gz_zmq_bridge/build/CMakeFiles/GzZmqCameraBridge.dir
-/mnt/data/home-distrobox/ardupilot-env/autonomous/gz_zmq_bridge/build/CMakeFiles/edit_cache.dir
-/mnt/data/home-distrobox/ardupilot-env/autonomous/gz_zmq_bridge/build/CMakeFiles/rebuild_cache.dir

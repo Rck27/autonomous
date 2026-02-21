@@ -1,0 +1,203 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+    <world name="pole">
+        <physics name="1ms" type="ignore">
+            <max_step_size>0.001</max_step_size>
+            <real_time_factor>1.0</real_time_factor>
+        </physics>
+
+    <plugin filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics">
+    </plugin>
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands">
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster">
+    </plugin>
+    <plugin filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu">
+    </plugin>
+    <plugin filename="gz-sim-navsat-system"
+      name="gz::sim::systems::NavSat">
+    </plugin>
+
+    <plugin filename="gz-sim-wind-effects-system"
+            name="gz::sim::systems::WindEffects">
+
+    <!-- Base wind: ~4.5 m/s from NW -->
+    <horizontal>
+        <magnitude>
+        <time_for_rise>5</time_for_rise>
+        <sin>
+            <amplitude_percent>0.35</amplitude_percent>
+            <period>10</period>
+        </sin>
+        <noise type="gaussian">
+            <stddev>0.6</stddev>
+        </noise>
+        </magnitude>
+
+        <direction>
+        <time_for_rise>15</time_for_rise>
+        <sin>
+            <amplitude>0.15</amplitude>
+            <period>25</period>
+        </sin>
+        <noise type="gaussian">
+            <stddev>0.05</stddev>
+        </noise>
+        </direction>
+    </horizontal>
+
+    <!-- thermal convection -->
+    <vertical>
+        <time_for_rise>3</time_for_rise>
+        <noise type="gaussian">
+        <stddev>0.4</stddev>
+        </noise>
+    </vertical>
+
+    <!-- amplify turbulence near ground -->
+    <force_approximation_scaling_factor>
+        <when zlt="5">1.6</when>
+        <when zge="5">1.0</when>
+    </force_approximation_scaling_factor>
+
+    </plugin>
+
+    <scene>
+        <ambient>0.9 0.9 0.9</ambient>
+        <background>0.7 0.8 0.9</background>
+        <sky>
+            <time>13</time>
+            <clouds>
+                <humidity>0.15</humidity>
+                <mean_size>0.2</mean_size>
+
+            </clouds>
+        </sky>
+        <shadow>1</shadow>
+
+    </scene>
+
+    <spherical_coordinates>
+        <latitude_deg>37.158333</latitude_deg>
+        <longitude_deg>38.791668</longitude_deg>
+        <elevation>477</elevation>
+      <heading_deg>0</heading_deg>
+      <surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+    
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 50 0 0 0</pose>
+      <diffuse>0.95 0.95 0.9 1</diffuse>
+      <specular>0.8 0.8 0.8 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.3 0.3 -0.9</direction>
+    </light>
+
+    <model name="axes">
+      <static>1</static>
+      <link name="link">
+        <visual name="r">
+          <cast_shadows>0</cast_shadows>
+          <pose>5 0 0.1 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>10 0.01 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 0 0 0.8</ambient>
+            <diffuse>1 0 0 0.8</diffuse>
+            <emissive>1 0 0 0.8</emissive>
+            <specular>0.5 0.5 0.5 0.8</specular>
+          </material>
+        </visual>
+        <visual name="g">
+          <cast_shadows>0</cast_shadows>
+          <pose>0 5 0.1 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.01 10 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0 1 0 0.8</ambient>
+            <diffuse>0 1 0 0.8</diffuse>
+            <emissive>0 1 0 0.8</emissive>
+            <specular>0.5 0.5 0.5 0.8</specular>
+          </material>
+        </visual>
+        <visual name="b">
+          <cast_shadows>0</cast_shadows>
+          <pose>0 0 5.1 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.01 0.01 10</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0 0 1 0.8</ambient>
+            <diffuse>0 0 1 0.8</diffuse>
+            <emissive>0 0 1 0.8</emissive>
+            <specular>0.5 0.5 0.5 0.8</specular>
+          </material>
+        </visual>
+
+
+        <sensor name="navsat_sensor" type="navsat">
+          <always_on>1</always_on>
+          <update_rate>1</update_rate>
+        </sensor>
+      </link>
+    </model>
+
+    <model name="ground_plane">
+        <static>true</static>
+        <link name="link">
+<collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1000 1000</size> <!-- 1km x 1km solid ground -->
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1000 1000</size>
+            </plane>
+          </geometry>
+          <material>
+            <!-- A dusty, dry dirt color to match the Anatolian landscape -->
+            <ambient>0.65 0.58 0.45 1</ambient>
+            <diffuse>0.65 0.58 0.45 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+        </link>
+    </model>
+    
+    <include>
+        <uri>model://iris_with_downward_camera</uri>
+        <pose degrees="true">0 0 0.195 0 0 90 </pose>
+    </include>
+
+    </world>
+
+</sdf>

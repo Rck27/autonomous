@@ -4,6 +4,8 @@ from mavsdk import System
 from mavsdk.mission import MissionItem, MissionPlan
 from mavsdk.action import ActionError
 
+# from ardupilot.Tools.autotest.sim_vehicle import progress
+
 def haversine_distance(lat1, lon1, lat2, lon2):
     """Calculates the distance between two GPS coordinates in meters."""
     R = 6371000  # Radius of Earth in meters
@@ -101,6 +103,76 @@ async def upload_and_fly_mission(drone, mission_items):
             print("Mission complete!")
             break
 
+async def intercept_at_wp8(drone):
+    """
+    Wait until mission reaches waypoint 8,
+    switch to guided control,
+    move 10m right, hold, then return.
+    """
+
+    async for progress in drone.mission.mission_progress():
+        print(f"Mission progress: {progress.current}/{progress.total}")
+
+        if progress.current == 2:
+            print("Waypoint 8 reached — intercepting mission")
+
+            # pause mission
+            await drone.mission.pause_mission()
+
+            # switch to guided (Position control)
+            await drone.action.hold()
+
+            # get current position & heading
+            async for pos in drone.telemetry.position():
+                current_lat = pos.latitude_deg
+                current_lon = pos.longitude_deg
+                current_alt = pos.relative_altitude_m
+                break
+
+            async for heading in drone.telemetry.heading():
+                yaw_deg = heading.heading_deg
+                break
+
+            print(f"Current heading: {yaw_deg:.1f}°")
+
+            # compute 10m to the RIGHT of drone
+            import math
+
+            move_distance = 10  # meters
+            earth_radius = 6378137.0
+
+            # right = heading + 90 degrees
+            move_bearing = math.radians(yaw_deg + 90)
+
+            dlat = (move_distance * math.cos(move_bearing)) / earth_radius
+            dlon = (move_distance * math.sin(move_bearing)) / (
+                earth_radius * math.cos(math.radians(current_lat))
+            )
+
+            target_lat = current_lat + math.degrees(dlat)
+            target_lon = current_lon + math.degrees(dlon)
+
+            print("Moving 10m right of heading...")
+
+            await drone.action.goto_location(
+                target_lat,
+                target_lon,
+                current_alt,
+                yaw_deg
+            )
+
+            # wait until position reached
+            await asyncio.sleep(5)
+
+            print("Holding position...")
+            await drone.action.hold()
+            await asyncio.sleep(5)
+
+            print("Returning to mission...")
+            await drone.mission.start_mission()
+
+            break
+
 
 async def run():
     """Main function to connect to the drone and run the mission."""
@@ -127,7 +199,7 @@ async def run():
     
     print(f"Home position set to: LAT {home_lat}, LON {home_lon}")
 
-        # print(drone.telemetry.is_armed());
+    # print(drone.telemetry.is_armed())
 
     await drone.action.return_to_launch()
 
@@ -141,7 +213,7 @@ async def run():
     # Mission Parameters
     takeoff_altitude_agl = 10.0
     figure8_size_m = 250
-    num_waypoints = 50 # More waypoints = smoother path for the figure-8
+    num_waypoints = 8 # More waypoints = smoother path for the figure-8
 
     print("Taking off...")
     try:
@@ -153,24 +225,82 @@ async def run():
         return
 
     # Wait until takeoff is complete
-    await asyncio.sleep(10)
+    await asyncio.sleep(5)
 
-    # Generate the waypoints for the mission
-    print("Generating mission waypoints...")
-    waypoints = generate_figure8_waypoints(home_lat, home_lon, figure8_size_m, num_waypoints)
-    mission_items = create_mission_items(waypoints, takeoff_altitude_agl)
+    await drone.mission.start_mission()
 
-    # Upload and fly the mission
-    await upload_and_fly_mission(drone, mission_items)
+    print("mission drone...")
 
-    print("Mission finished. Returning to launch...")
-    await drone.action.return_to_launch()
 
-    # Wait until landed
-    async for in_air in drone.telemetry.in_air():
-        if not in_air:
-            print("-- Landed and disarmed.")
+    # Wait for the mission to complete
+    async for progress in drone.mission.mission_progress():
+        print(f"Mission progress: {progress.current}/{progress.total}")
+        if progress.current == progress.total:
+            print("Mission complete!")
             break
+    # await drone.action.arm()
+
+    # await drone.mission.start_mission()
+
+    # print("Mission started. Monitoring progress...")
+    #     # async for progress in drone.mission.mission_progress():
+
+    # async for progress in drone.mission.mission_progress():
+    #     print(f"Mission progress: {progress.current}/{progress.total}")
+    #     if progress.current == 2:
+    #         await drone.mission.pause_mission()
+    #         await drone.action.hold()
+    #         async for pos in drone.telemetry.position():
+    #             # print(f"Current position: LAT {pos.latitude_deg}, LON {pos.longitude_deg}, ALT {pos.relative_altitude_m}")
+    #             # break
+    #             lon = pos.longitude_deg
+    #             lat = pos.latitude_deg
+    #             alt = pos.relative_altitude_m
+    #             print(f"Current position: LAT {lat}, LON {lon}, ALT {alt}")
+    #             break
+            
+    #         await drone.action.goto_location(
+    #             lat, lon, alt - 10, 3.14 / 2
+    #         )
+
+    #         await asyncio.sleep(5)
+    #         for pos in drone.telemetry.position():
+    #             # print(f"Current position: LAT {pos.latitude_deg}, LON {pos.longitude_deg}, ALT {pos.relative_altitude_m}")
+    #             # break
+    #             lon = pos.longitude_deg
+    #             lat = pos.latitude_deg
+    #             alt = pos.relative_altitude_m
+    #             print(f"Current position: LAT {lat}, LON {lon}, ALT {alt}")
+    #         # break
+           
+    #         await drone.action.land()
+
+    #         print("Landed.")
+
+            # long = await drone.telemetry.position
+
+    
+    # await intercept_at_wp8(drone)
+    
+
+
+
+    # # Generate the waypoints for the mission
+    # print("Generating mission waypoints...")
+    # waypoints = generate_figure8_waypoints(home_lat, home_lon, figure8_size_m, num_waypoints)
+    # mission_items = create_mission_items(waypoints, takeoff_altitude_agl)
+
+    # # Upload and fly the mission
+    # await upload_and_fly_mission(drone, mission_items)
+
+    # print("Mission finished. Returning to launch...")
+    # await drone.action.return_to_launch()
+
+    # # Wait until landed
+    # async for in_air in drone.telemetry.in_air():
+    #     if not in_air:
+    #         print("-- Landed and disarmed.")
+    #         break
 
 if __name__ == "__main__":
     try:
