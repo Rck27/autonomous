@@ -15,6 +15,11 @@ target_data = {
     'cooldown_until': 0.0 # Prevents re-triggering immediately after returning to mission
 }
 
+pole1 = (-80, 20)
+pole2 = (-230, 20)
+clearance = 30
+precision = 40
+
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     """Calculates the distance between two GPS coordinates in meters."""
@@ -54,19 +59,76 @@ async def start_udp_listener(host="127.0.0.1", port=9000):
     )
     return transport
 
-def generate_figure8_waypoints(center_lat, center_lon, size_meters, precision):
-    waypoints = []
+
+def generate_figure8_around_poles(pole1_xy, pole2_xy, clearance_meters, precision):
+    """
+    Generates a Figure-8 path in Gazebo Local Coordinates (X, Y) that loops around two poles.
+    """
+    x1, y1 = pole1_xy
+    x2, y2 = pole2_xy
+    
+    # 1. Find the center between the two poles
+    center_x = (x1 + x2) / 2.0
+    center_y = (y1 + y2) / 2.0
+    
+    # 2. Calculate the distance between the poles
+    dx = x1 - x2
+    dy = y1 - y2
+    distance = np.sqrt(dx**2 + dy**2)
+    
+    # Calculate the angle to align the Figure-8 perfectly with the poles
+    # (Works even if you move the poles diagonally later!)
+    angle = np.arctan2(dy, dx)
+    
+    # 3. Figure-8 Size Settings
+    # Amplitude A (X-axis length): Half the distance between poles + your safe clearance
+    
+    waypoints_xy = []
+    for c in ((clearance_meters, clearance_meters - 3)):
+        A = (distance / 2.0) + c
+        # Amplitude B (Y-axis width): Keep it equal to A for nicely rounded loops
+        B = A 
+        for i in range(precision):
+            t = 2 * np.pi * (precision-i) / precision
+            
+            # Standard Figure-8 formula (centered at 0,0)
+            local_x = A * np.sin(t)
+            local_y = B * np.sin(t) * np.cos(t)
+            
+            # Rotate the path to match the line connecting the two poles
+            rot_x = local_x * np.cos(angle) - local_y * np.sin(angle)
+            rot_y = local_x * np.sin(angle) + local_y * np.cos(angle)
+            
+            # Translate to the actual center point between the poles
+            final_x = center_x + rot_x
+            final_y = center_y + rot_y
+            
+            waypoints_xy.append((final_x, final_y))
+
+    return waypoints_xy
+
+
+def transform_point(lx, ly, angle, cx, cy):
+    """Helper to rotate and translate points"""
+    rot_x = lx * np.cos(angle) - ly * np.sin(angle)
+    rot_y = lx * np.sin(angle) + ly * np.cos(angle)
+    return cx + rot_x, cy + rot_y
+
+def convert_xy_to_latlon(waypoints_xy, base_lat, base_lon):
+    """
+    Converts Gazebo Local X,Y meters back to Latitude/Longitude for GPS navigation.
+    """
+    lat_lon_waypoints = []
     meters_to_lat_deg = 1 / 111111.0
-    meters_to_lon_deg = 1 / (111111.0 * np.cos(np.radians(center_lat)))
-    a = size_meters / 2.0
-    for i in range(precision):
-        t = 2 * np.pi * i / precision
-        x_offset = a * np.sin(t)
-        y_offset = a * np.sin(t) * np.cos(t)
-        lat_offset = y_offset * meters_to_lat_deg
-        lon_offset = x_offset * meters_to_lon_deg
-        waypoints.append((center_lat + lat_offset, center_lon + lon_offset))
-    return waypoints
+    meters_to_lon_deg = 1 / (111111.0 * np.cos(np.radians(base_lat)))
+    
+    for (x, y) in waypoints_xy:
+        # Note: In standard ENU, X is Longitude (East/West), Y is Latitude (North/South)
+        lat = base_lat + (y * meters_to_lat_deg)
+        lon = base_lon + (x * meters_to_lon_deg)
+        lat_lon_waypoints.append((lat, lon))
+        
+    return lat_lon_waypoints
 
 def create_mission_items(waypoints, flight_alt_agl):
     mission_items = []
@@ -317,13 +379,20 @@ async def run():
     
     await drone.mission.clear_mission()
     print("Generating and uploading new mission...")
-    waypoints = generate_figure8_waypoints(home_lat, home_lon, 250, 8)
-    mission_items = create_mission_items(waypoints, 10.0)
+    # waypoints = generate_figure8_waypoints(home_lat, home_lon, 250, 8)
+
+    waypoints = generate_figure8_around_poles(pole1, pole2, clearance, precision)
+
+
+    waypoints = convert_xy_to_latlon(waypoints, home_lat, home_lon)
+    
+    mission_items = create_mission_items(waypoints, 20.0)
     mission_plan = MissionPlan(mission_items)
     await drone.mission.upload_mission(mission_plan)
     print("Mission uploaded.")
 
-
+    # pole_lat, pole_lon = convert_xy_to_latlon([pole1], home_lat, home_lon)[0]
+    # print(f"Pole 1 GPS: LAT {pole_lat:.6f}, LON {pole_lon:.6f}")
     print("Arming and Taking off...")
     try:
         await drone.action.set_takeoff_altitude(10.0)
@@ -333,14 +402,16 @@ async def run():
     except ActionError as e:
         print(f"Takeoff failed, might already flying: {e}")
         # return
+# LAT -35.363078, LON 149.165013
 
     # Start UDP Listener and Interception Task
     udp_transport = await start_udp_listener(host="127.0.0.1", port=9000)
-    intercept_task = asyncio.create_task(interception_task(drone))
+    # intercept_task = asyncio.create_task(interception_task(drone))
+
 
     print("Starting pre-uploaded mission...")
     await drone.mission.start_mission()
-
+    # await drone.action.goto_location(pole_lat, pole_lon, 10.0, 0.0)
     async for progress in drone.mission.mission_progress():
         print(f"Mission progress: {progress.current}/{progress.total}")
         if progress.current == progress.total:
@@ -349,7 +420,17 @@ async def run():
             
     print("Returning to launch...")
     await drone.action.return_to_launch()
-    intercept_task.cancel()
+
+    async for pos in drone.telemetry.position():
+        home_distance = haversine_distance(pos.latitude_deg, pos.longitude_deg, home_lat, home_lon)
+        print(f"Distance to home: {home_distance:.2f} m")
+        if home_distance < 2.0:
+            print("Landed at home location.")
+            # await drone.action.land()
+            # await drone.action.
+            break
+        await asyncio.sleep(1)
+    # intercept_task.cancel()
     udp_transport.close()
 
 if __name__ == "__main__":
