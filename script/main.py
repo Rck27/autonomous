@@ -6,6 +6,9 @@ from mavsdk.action import ActionError
 from mavsdk.mission import MissionItem, MissionPlan
 from mavsdk.offboard import VelocityBodyYawspeed, OffboardError
 
+DEBUG = False
+SIM = True
+
 # Global dictionary to store the latest YOLO target data
 target_data = {
     'active': False,
@@ -18,7 +21,19 @@ target_data = {
 pole1 = (-80, 20)
 pole2 = (-230, 20)
 clearance = 30
-precision = 40
+precision = 10
+
+# Mission Parameters
+speed = 10
+acceptance_radius = 10.0
+alt_mission = 10.0
+
+lap = [
+    #[pi, clearance, rotation_direction]
+    [2 * np.pi, clearance, 1],
+    [2 * np.pi, clearance - 10, 1],
+    [np.pi, clearance - 25, -1]
+    ]
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -61,51 +76,43 @@ async def start_udp_listener(host="127.0.0.1", port=9000):
 
 
 def generate_figure8_around_poles(pole1_xy, pole2_xy, clearance_meters, precision):
-    """
-    Generates a Figure-8 path in Gazebo Local Coordinates (X, Y) that loops around two poles.
-    """
+
     x1, y1 = pole1_xy
     x2, y2 = pole2_xy
     
-    # 1. Find the center between the two poles
     center_x = (x1 + x2) / 2.0
     center_y = (y1 + y2) / 2.0
     
-    # 2. Calculate the distance between the poles
     dx = x1 - x2
     dy = y1 - y2
     distance = np.sqrt(dx**2 + dy**2)
     
-    # Calculate the angle to align the Figure-8 perfectly with the poles
-    # (Works even if you move the poles diagonally later!)
     angle = np.arctan2(dy, dx)
     
-    # 3. Figure-8 Size Settings
-    # Amplitude A (X-axis length): Half the distance between poles + your safe clearance
-    
+
     waypoints_xy = []
-    for c in ((clearance_meters, clearance_meters - 3)):
-        A = (distance / 2.0) + c
-        # Amplitude B (Y-axis width): Keep it equal to A for nicely rounded loops
-        B = A 
-        for i in range(precision):
-            t = 2 * np.pi * (precision-i) / precision
-            
-            # Standard Figure-8 formula (centered at 0,0)
-            local_x = A * np.sin(t)
+    for i in range(len(lap)):
+        for t in range(precision):
+            A = distance / 2.0 + lap[i][1]
+            B = A
+
+            t = lap[i][0] * (precision - t) / precision
+            local_x = A * np.sin(t) * lap[i][2]
             local_y = B * np.sin(t) * np.cos(t)
             
-            # Rotate the path to match the line connecting the two poles
             rot_x = local_x * np.cos(angle) - local_y * np.sin(angle)
             rot_y = local_x * np.sin(angle) + local_y * np.cos(angle)
             
-            # Translate to the actual center point between the poles
             final_x = center_x + rot_x
             final_y = center_y + rot_y
             
             waypoints_xy.append((final_x, final_y))
-
+    waypoints_xy.append((center_x, center_y))
     return waypoints_xy
+
+def calc_clearance_point(pos_a, pos_b, clearance):
+    ba = pos_b - pos_a
+    pole_ar = np.array([pole1, pole2])
 
 
 def transform_point(lx, ly, angle, cx, cy):
@@ -123,7 +130,7 @@ def convert_xy_to_latlon(waypoints_xy, base_lat, base_lon):
     meters_to_lon_deg = 1 / (111111.0 * np.cos(np.radians(base_lat)))
     
     for (x, y) in waypoints_xy:
-        # Note: In standard ENU, X is Longitude (East/West), Y is Latitude (North/South)
+        # ENU, X is Longitude (East/West), Y is Latitude (North/South)
         lat = base_lat + (y * meters_to_lat_deg)
         lon = base_lon + (x * meters_to_lon_deg)
         lat_lon_waypoints.append((lat, lon))
@@ -132,8 +139,7 @@ def convert_xy_to_latlon(waypoints_xy, base_lat, base_lon):
 
 def create_mission_items(waypoints, flight_alt_agl):
     mission_items = []
-    speed = 10
-    acceptance_radius = 10.0
+
     for lat, lon in waypoints:
         item = MissionItem(
             lat, lon, flight_alt_agl, speed, True, 
@@ -142,13 +148,11 @@ def create_mission_items(waypoints, flight_alt_agl):
             float('nan'), MissionItem.VehicleAction.NONE
         )
         mission_items.append(item)
-    # mission_items.append(MissionItem(
 
-    # ))
     return mission_items
 
 
-# --- VISUAL SERVOING / INTERCEPTION LOGIC ---
+# INTERCEPTION - UNUSED
 async def interception_task(drone):
     """Background task that waits for YOLO targets, centers the drone, and descends."""
     
@@ -355,10 +359,13 @@ async def interception_task(drone):
         await drone.mission.start_mission()
 
 
-# --- MAIN RUNNER ---
 async def run():
     drone = System()
-    await drone.connect(system_address="udpin://127.0.0.1:14551")
+    if SIM:
+       await drone.connect(system_address="udpin://127.0.0.1:14551")
+    else:
+        await drone.connect(system_address="serial:///dev/ttyUSB0:115200")
+
 
     print("Waiting for drone to connect...")
     async for state in drone.core.connection_state():
@@ -374,25 +381,26 @@ async def run():
 
     async for position in drone.telemetry.position():
         home_lat, home_lon = position.latitude_deg, position.longitude_deg
+        print(f"Home position: LAT {home_lat:.6f}, LON {home_lon:.6f}")
         break
 
     
     await drone.mission.clear_mission()
     print("Generating and uploading new mission...")
-    # waypoints = generate_figure8_waypoints(home_lat, home_lon, 250, 8)
 
     waypoints = generate_figure8_around_poles(pole1, pole2, clearance, precision)
 
+    waypoints.append((0,0))
 
     waypoints = convert_xy_to_latlon(waypoints, home_lat, home_lon)
     
-    mission_items = create_mission_items(waypoints, 20.0)
+    mission_items = create_mission_items(waypoints, alt_mission)
+
     mission_plan = MissionPlan(mission_items)
     await drone.mission.upload_mission(mission_plan)
     print("Mission uploaded.")
 
-    # pole_lat, pole_lon = convert_xy_to_latlon([pole1], home_lat, home_lon)[0]
-    # print(f"Pole 1 GPS: LAT {pole_lat:.6f}, LON {pole_lon:.6f}")
+
     print("Arming and Taking off...")
     try:
         await drone.action.set_takeoff_altitude(10.0)
@@ -401,9 +409,7 @@ async def run():
         await asyncio.sleep(8)
     except ActionError as e:
         print(f"Takeoff failed, might already flying: {e}")
-        # return
-# LAT -35.363078, LON 149.165013
-
+        
     # Start UDP Listener and Interception Task
     udp_transport = await start_udp_listener(host="127.0.0.1", port=9000)
     # intercept_task = asyncio.create_task(interception_task(drone))
@@ -433,8 +439,35 @@ async def run():
     # intercept_task.cancel()
     udp_transport.close()
 
+async def debug_run():
+    import matplotlib.pyplot as plt
+    print(f"RUNNING DEBUG, pole1: {pole1}, pole2: {pole2}, clearance: {clearance}, precision: {precision}")
+
+    waypoints = generate_figure8_around_poles(pole1, pole2, clearance, precision)
+    print(f" {np.shape(waypoints)}")
+
+    xs = [p[0] for p in waypoints]
+    ys = [p[1] for p in waypoints]
+
+    plt.figure()
+    plt.scatter(xs, ys)
+
+    # kasih nomor di tiap titik
+    for i, (x, y) in enumerate(waypoints):
+        plt.text(x, y, str(i), fontsize=9)
+
+    plt.title("Figure-8 Waypoints Sequence")
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.axis('equal')
+    plt.grid()
+    plt.show()
+
 if __name__ == "__main__":
     try:
-        asyncio.run(run())
+        if not DEBUG: 
+            asyncio.run(run())
+        if DEBUG:
+            asyncio.run(debug_run())
     except KeyboardInterrupt:
         print("Script interrupted by user.")
