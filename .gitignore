@@ -5,6 +5,8 @@ ardupilot/
 logs/
 terrain/
 
+dataset/*
+
 rdk/Ai_Toolchain_Package-release-v1.23.8-OE-v1.2.6
 rdk/rdk_*
 rdk/*.xz
